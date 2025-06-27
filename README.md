@@ -53,4 +53,4 @@ Test: Upload a receipt and watch it appear on the dashboard!
 SnapTrack saves hours every month and avoids manual errors. It’s simple, scalable, and works for anyone—from small businesses to individuals. No more lost receipts. No more headaches.
 
 ---- Shivam Singh ----
-![alt text](image.png)
+![alt text](Dashboard.png)
