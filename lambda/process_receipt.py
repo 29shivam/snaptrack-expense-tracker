@@ -1,24 +1,22 @@
-import json, os, uuid, re
+import os
+import json
+import uuid
+import re
 from decimal import Decimal
 from datetime import datetime
 import boto3
 
 def extract_fields_and_lineitems(lines):
-    # 1. Vendor extraction (find "Walmart" or first all-caps line)
+    # 1. Vendor Extraction
     vendor = None
-    for i, line in enumerate(lines[:10]):
-        if re.search(r'walmart', line, re.I):
-            vendor = "Walmart"
+    for line in lines[:10]:
+        if re.search(r'^[A-Z][A-Z0-9 &\.\-]{4,}$', line.strip()):
+            vendor = line.strip().title()
             break
-    if not vendor:
-        for line in lines[:10]:
-            if line.strip().isupper() and len(line.strip()) > 4:
-                vendor = line.strip().title()
-                break
     if not vendor:
         vendor = "Unknown"
 
-    # 2. Date extraction (MM/DD/YYYY, MM/DD/YY, or YYYY-MM-DD)
+    # 2. Date Extraction (matches MM/DD/YY, MM/DD/YYYY, or YYYY-MM-DD)
     date = None
     date_pat = re.compile(r'(\d{2}/\d{2}/\d{2,4}|\d{4}-\d{2}-\d{2})')
     for line in lines:
@@ -39,23 +37,23 @@ def extract_fields_and_lineitems(lines):
                 date = dstr
             break
     if not date:
-        date = datetime.utcnow().isoformat()
+        date = datetime.utcnow().strftime("%Y-%m-%d")
 
-    # 3. Total extraction
+    # 3. Total Extraction (search from bottom up)
     total = None
-    total_pat = re.compile(r'(total|amount due|balance due)[^\d]{0,10}([\d,.]+)', re.I)
-    for line in lines[::-1]:  # search from bottom up
+    total_pat = re.compile(r'(total|amount due|balance due)[^\d]{0,10}([\d]+\.[\d]{2})', re.I)
+    for line in lines[::-1]:
         m = total_pat.search(line)
         if m:
             total = m.group(2)
             break
     if not total:
-        # Fallback: find last number over $10
+        # Fallback: last number over $5
         for line in lines[::-1]:
             price_m = re.search(r'([\d]+\.[\d]{2})', line)
             if price_m:
                 p = float(price_m.group(1))
-                if p > 10:
+                if p > 5:
                     total = price_m.group(1)
                     break
     try:
@@ -63,18 +61,45 @@ def extract_fields_and_lineitems(lines):
     except Exception:
         total = Decimal('0')
 
-    # 4. Line Items extraction: all lines with prices, skip totals/subtotals/tax/etc.
+    # 4. Line Items Extraction (universal logic)
+    summary_skip = re.compile(
+        r'(total|tax|change due|amount due|subtotal|balance|payment|tender|tend|visa|master|cash|debit|paid|refund|number of items|qty|quantity|item sold|approved|chip read|card|aid|resp|merchant|seq|app|thank you|date|time|balance|trans id|auth|op#|amount)',
+        re.I
+    )
+
     lineitems = []
-    for line in lines:
-        if re.search(r'(total|subtotal|tax|amount due|balance due|change due|debit tend)', line, re.I):
+    prev_desc = None
+    for i, line in enumerate(lines):
+        if summary_skip.search(line): continue
+
+        # a. "desc    9.99"
+        m = re.match(r'^(.*?)[ \t]+([\d]+\.[\d]{2})$', line.strip())
+        if m and len(m.group(1).strip()) > 1:
+            desc = m.group(1).strip(" .:-")
+            price = m.group(2)
+            lineitems.append({'Description': desc, 'Amount': price})
+            prev_desc = None
             continue
-        price_matches = re.findall(r'([\d]+\.[\d]{2})', line)
-        if price_matches:
-            for price in price_matches:
-                desc = line.replace(price, '').strip(" -:.,X")
-                # Avoid empty descriptions
-                if desc and not desc.isdigit():
-                    lineitems.append({'Description': desc, 'Amount': price})
+
+        # b. "2 @ 6.99"
+        m2 = re.match(r'^(\d+)\s*@\s*([\d]+\.[\d]{2})', line.strip())
+        if m2:
+            qty, price = m2.groups()
+            desc = f"{qty} @ {price}"
+            lineitems.append({'Description': desc, 'Amount': price})
+            prev_desc = None
+            continue
+
+        # c. Standalone price line after a likely product line
+        m3 = re.match(r'^([\d]+\.[\d]{2})$', line.strip())
+        if m3 and prev_desc and len(prev_desc) > 2 and not summary_skip.search(prev_desc):
+            price = m3.group(1)
+            lineitems.append({'Description': prev_desc.strip(" .:-"), 'Amount': price})
+            prev_desc = None
+            continue
+
+        # d. If not price, remember for next round
+        prev_desc = line
 
     return {
         'vendor': vendor,
@@ -103,7 +128,7 @@ def lambda_handler(event, context):
             lines = [b['Text'] for b in resp['Blocks'] if b['BlockType'] == 'LINE']
             print("🔍 OCR lines:", lines)
         except Exception as e:
-            print("❌ Textract failed:", e)
+            print(" Textract failed:", e)
             continue
 
         fields = extract_fields_and_lineitems(lines)
@@ -128,7 +153,7 @@ def lambda_handler(event, context):
 
         try:
             table.put_item(Item=item)
-            print(f"✅ Successfully wrote ExpenseId={expense_id} to DynamoDB")
+            print(f" Successfully wrote ExpenseId={expense_id} to DynamoDB")
         except Exception as e:
             print("❌ DynamoDB put_item failed:", e)
 
