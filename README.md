@@ -29,7 +29,7 @@ Amazon S3	Stores uploaded receipt images
 AWS Textract	OCR and structured data extraction from images
 DynamoDB	Secure, fast NoSQL storage for expense records
 API Gateway	REST API endpoints for frontend-backend comms
-Amazon SES	(Optional) Sends automated email reports
+Amazon SES	Sends automated email reports
 React.js	Frontend framework for interactive dashboard
 Tailwind CSS	Styling and responsive design
 AWS Amplify	Hosting and CI/CD for frontend
